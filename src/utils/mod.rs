@@ -41,7 +41,8 @@ impl Default for Channel {
         let available_interfaces = get_available_interfaces(); // 获取可用的网络接口
 
         let default_interface = available_interfaces
-            .get(0)
+            .iter()
+            .next()
             .expect("no interfaces available")
             .clone(); // 默认网络接口
 
@@ -62,7 +63,20 @@ impl Channel {
             .to_string(); // 源IP地址
 
         let source_ip = Ipv4Addr::from_str(source_ip.as_str()).expect("couldn't parse IP"); // 源IP地址
-        let payload_offset = 0; // 负载偏移量
+        let payload_offset = if cfg!(any(target_os = "macos", target_os = "ios"))
+            && network_interface.is_up()
+            && !network_interface.is_broadcast()
+            && ((!network_interface.is_loopback() && network_interface.is_point_to_point())
+                || network_interface.is_loopback())
+        {
+            if network_interface.is_loopback() {
+                14
+            } else {
+                0
+            }
+        } else {
+            0
+        }; // 负载偏移量
 
         Channel {
             interface: network_interface.clone(), // 网络接口
@@ -133,14 +147,33 @@ impl Channel {
 pub fn get_available_interfaces() -> Vec<NetworkInterface> {
     let all_interfaces = pnet_datalink::interfaces(); // 所有网络接口
 
-    all_interfaces
-        .into_iter()
-        .filter(|e| {
-            e.mac.is_some()
-                && e.mac.unwrap() != MacAddr::zero()
-                && e.ips.iter().any(|ip| ip.ip().to_string() != "0.0.0.0")
-        })
-        .collect() // 过滤出可用的网络接口
+    available_interfaces = if cfg!(target_family = "windows") {
+        all_interfaces
+            .into_iter()
+            .filter(|e| {
+                e.mac.is_some()
+                    && e.mac.unwrap() != MacAddr::zero()
+                    && e.ips
+                        .iter()
+                        .filter(|ip| ip.ip().to_string() != "0.0.0.0")
+                        .next()
+                        .is_some()
+            })
+            .collect()
+    } else {
+        all_interfaces
+            .into_iter()
+            .filter(|e| {
+                e.is_up()
+                    && !e.is_loopback()
+                    && e.ips.iter().filter(|ip| ip.is_ipv4()).next().is_some()
+                    && e.mac.is_some()
+                    && e.mac.unwrap() != MacAddr::zero()
+            })
+            .collect()
+    }; // 过滤出可用的网络接口
+
+    available_interfaces // 返回可用的网络接口
 }
 
 // 处理ICMP数据包
@@ -199,7 +232,7 @@ fn process_incoming_packet(
                 // 负载偏移量大于0且数据包长度大于负载偏移量
                 return handle_ipv4_packet(&packet[payload_offset..]); // 处理IPv4数据包
             }
-            return handle_ethernet_frame(packet); // 处理以太网数据包
+            handle_ethernet_frame(packet) // 处理以太网数据包
         }
         Err(e) => panic!("error while reading: {e}"), // 读取数据包时出错
     }
