@@ -147,7 +147,7 @@ impl Channel {
 pub fn get_available_interfaces() -> Vec<NetworkInterface> {
     let all_interfaces = pnet_datalink::interfaces(); // 所有网络接口
 
-    available_interfaces = if cfg!(target_family = "windows") {
+    let available_interfaces = if cfg!(target_family = "windows") {
         all_interfaces
             .into_iter()
             .filter(|e| {
